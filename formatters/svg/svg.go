@@ -17,7 +17,9 @@ import (
 type Option func(f *Formatter)
 
 // FontFamily sets the font-family.
-func FontFamily(fontFamily string) Option { return func(f *Formatter) { f.fontFamily = fontFamily } }
+func FontFamily(fontFamily string) Option {
+	return func(f *Formatter) { f.fontFamily = fontFamily }
+}
 
 // EmbedFontFile embeds given font file
 func EmbedFontFile(fontFamily string, fileName string) (option Option, err error) {
@@ -41,8 +43,18 @@ func EmbedFontFile(fontFamily string, fileName string) (option Option, err error
 }
 
 // EmbedFont embeds given base64 encoded font
-func EmbedFont(fontFamily string, font string, format FontFormat) Option {
-	return func(f *Formatter) { f.fontFamily = fontFamily; f.embeddedFont = font; f.fontFormat = format }
+func EmbedFont(family string, data string, format FontFormat) Option {
+	return func(f *Formatter) {
+		f.fontFamily = family
+		f.fontVariants = []fontVariant{{embedded: data, format: format, weight: "normal", style: "normal"}}
+	}
+}
+
+// EmbedAdditionalFont embeds additional given base64 encoded font and weight and style
+func EmbedFontVariant(weight, style, data string, format FontFormat) Option {
+	return func(f *Formatter) {
+		f.fontVariants = append(f.fontVariants, fontVariant{embedded: data, weight: weight, style: style, format: format})
+	}
 }
 
 // New SVG formatter.
@@ -57,8 +69,7 @@ func New(options ...Option) *Formatter {
 // Formatter that generates SVG.
 type Formatter struct {
 	fontFamily   string
-	embeddedFont string
-	fontFormat   FontFormat
+	fontVariants []fontVariant
 }
 
 func (f *Formatter) Format(w io.Writer, style *chroma.Style, iterator chroma.Iterator) (err error) {
@@ -88,9 +99,7 @@ func (f *Formatter) writeSVG(w io.Writer, style *chroma.Style, tokens []chroma.T
 	fmt.Fprint(w, "<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.0//EN\" \"http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd\">\n")
 	fmt.Fprintf(w, "<svg width=\"%dpx\" height=\"%dpx\" xmlns=\"http://www.w3.org/2000/svg\">\n", 8*maxLineWidth(lines), 10+int(16.8*float64(len(lines)+1)))
 
-	if f.embeddedFont != "" {
-		f.writeFontStyle(w)
-	}
+	f.writeFontStyle(w)
 
 	fmt.Fprintf(w, "<rect width=\"100%%\" height=\"100%%\" fill=\"%s\"/>\n", style.Get(chroma.Background).Background.String())
 	fmt.Fprintf(w, "<g font-family=\"%s\" font-size=\"14px\" fill=\"%s\">\n", f.fontFamily, style.Get(chroma.Text).Colour.String())
@@ -162,14 +171,25 @@ var fontFormats = [...]string{
 }
 
 func (f *Formatter) writeFontStyle(w io.Writer) {
-	fmt.Fprintf(w, `<style>
-@font-face {
-	font-family: '%s';
-	src: url(data:application/x-font-%s;charset=utf-8;base64,%s) format('%s');'
-	font-weight: normal;
-	font-style: normal;
-}
-</style>`, f.fontFamily, fontFormats[f.fontFormat], f.embeddedFont, fontFormats[f.fontFormat])
+	var sb strings.Builder
+
+	for _, variant := range f.fontVariants {
+		if variant.embedded == "" {
+			continue
+		}
+
+		format := fontFormats[variant.format]
+		sb.WriteString("\n@font-face {\n")
+		fmt.Fprintf(&sb, "\tfont-family: '%s';\n", f.fontFamily)
+		fmt.Fprintf(&sb, "\tfont-weight: %s;\n", variant.weight)
+		fmt.Fprintf(&sb, "\tfont-style: %s;\n", variant.style)
+		fmt.Fprintf(&sb, "\tsrc: url(data:font/%s;base64,%s) format('%s');\n", format, variant.embedded, format)
+		sb.WriteString("}")
+	}
+
+	if sb.Len() > 0 {
+		fmt.Fprintf(w, "<style>%s\n</style>\n", sb.String())
+	}
 }
 
 func (f *Formatter) styleAttr(styles map[chroma.TokenType]string, tt chroma.TokenType) string {
@@ -219,4 +239,11 @@ func StyleEntryToSVG(e chroma.StyleEntry) string {
 		styles = append(styles, "text-decoration=\"underline\"")
 	}
 	return strings.Join(styles, " ")
+}
+
+type fontVariant struct {
+	weight   string
+	style    string
+	embedded string
+	format   FontFormat
 }
